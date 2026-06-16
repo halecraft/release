@@ -252,7 +252,7 @@ ${dryRun ? "[DRY RUN] " : ""}Publishing packages
       console.log(`
 Publishing ${pkg.name}@${pkg.version}...`);
       const dryRunFlag = dryRun ? " --dry-run" : "";
-      const accessFlag = config.access ? ` --access ${config.access}` : "";
+      const accessFlag = ` --access ${config.access ?? "public"}`;
       try {
         run(`pnpm publish${accessFlag} --no-git-checks${dryRunFlag}`, {
           cwd: resolve4(cwd, pkg.path)

@@ -63,7 +63,8 @@ export function publish(cwd: string, config: ResolvedConfig, dryRun: boolean): v
     for (const pkg of pkgs) {
       console.log(`\nPublishing ${pkg.name}@${pkg.version}...`)
       const dryRunFlag = dryRun ? " --dry-run" : ""
-      const accessFlag = config.access ? ` --access ${config.access}` : ""
+      // Default to public access for all publishable (non-private) packages
+      const accessFlag = ` --access ${config.access ?? "public"}`
       try {
         run(`pnpm publish${accessFlag} --no-git-checks${dryRunFlag}`, {
           cwd: resolve(cwd, pkg.path),
