@@ -229,7 +229,9 @@ ${dryRun ? "[DRY RUN] " : ""}Publishing packages
 `);
   const workspace = discoverWorkspace(cwd, config);
   const tiers = computePublishTiers(workspace.publishable);
-  checkNpmAuth(cwd);
+  if (!dryRun) {
+    checkNpmAuth(cwd);
+  }
   console.log("Step 1/4: Building all packages...\n");
   run(config.buildCommand, { cwd });
   console.log("\nStep 2/4: Running tests...\n");

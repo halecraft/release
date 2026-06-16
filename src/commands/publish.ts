@@ -32,8 +32,10 @@ export function publish(cwd: string, config: ResolvedConfig, dryRun: boolean): v
   const workspace = discoverWorkspace(cwd, config)
   const tiers = computePublishTiers(workspace.publishable)
 
-  // 0. Preflight — verify npm auth
-  checkNpmAuth(cwd)
+  // 0. Preflight — verify npm auth (skip for dry-runs)
+  if (!dryRun) {
+    checkNpmAuth(cwd)
+  }
 
   // 1. Build
   console.log("Step 1/4: Building all packages...\n")

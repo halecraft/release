@@ -10,7 +10,9 @@
   },
   "scripts": {
     "build": "tsup",
-    "dev": "tsup --watch"
+    "dev": "tsup --watch",
+    "release": "node dist/cli.js",
+    "test": "echo \"No tests yet\" && exit 0"
   },
   "dependencies": {
     "jiti": "^2.4.2",
