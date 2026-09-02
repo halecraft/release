@@ -1,16 +1,18 @@
-import { createJiti } from "jiti"
-import { resolve } from "node:path"
 import { existsSync } from "node:fs"
+import { resolve } from "node:path"
+import { createJiti } from "jiti"
 import type { ReleaseConfig } from "./index.js"
 
-export type ResolvedConfig = Required<Omit<ReleaseConfig, "groups" | "access">> & {
+export type ResolvedConfig = Required<
+  Omit<ReleaseConfig, "groups" | "access">
+> & {
   groups?: Record<string, { packages: string[] }>
   access?: "public" | "restricted"
 }
 
 export async function loadConfig(cwd: string): Promise<ResolvedConfig> {
   const jiti = createJiti(import.meta.url)
-  
+
   const configNames = [
     "release.config.ts",
     "release.config.js",
@@ -24,7 +26,7 @@ export async function loadConfig(cwd: string): Promise<ResolvedConfig> {
     const configPath = resolve(cwd, name)
     if (existsSync(configPath)) {
       try {
-        const mod = await jiti.import(configPath) as any
+        const mod = (await jiti.import(configPath)) as any
         userConfig = mod.default || mod
         break
       } catch (err) {

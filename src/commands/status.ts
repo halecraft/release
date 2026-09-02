@@ -1,7 +1,11 @@
 import type { ResolvedConfig } from "../config.js"
-import { discoverWorkspace } from "../workspace.js"
+import { fetchRegistryVersion } from "../registry.js"
+import { discoverWorkspace, type WorkspacePackage } from "../workspace.js"
 
-export async function status(cwd: string, config: ResolvedConfig): Promise<void> {
+export async function status(
+  cwd: string,
+  config: ResolvedConfig,
+): Promise<void> {
   console.log("\nPackage Status\n")
 
   const workspace = discoverWorkspace(cwd, config)
@@ -11,7 +15,7 @@ export async function status(cwd: string, config: ResolvedConfig): Promise<void>
     await printPackages(workspace.publishable)
   } else {
     for (const [groupName, pkgs] of [...workspace.groups.entries()].sort(
-      ([a], [b]) => a.localeCompare(b)
+      ([a], [b]) => a.localeCompare(b),
     )) {
       console.log(`  ${groupName}:`)
       await printPackages(pkgs, "    ")
@@ -20,33 +24,25 @@ export async function status(cwd: string, config: ResolvedConfig): Promise<void>
   }
 }
 
-async function printPackages(pkgs: { name: string; version: string }[], indent = "  ") {
+async function printPackages(
+  pkgs: WorkspacePackage[],
+  indent = "  ",
+): Promise<void> {
   for (const pkg of pkgs) {
-    let registryVersion: string
-    try {
-      const resp = await fetch(
-        `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/latest`
-      )
-      if (resp.ok) {
-        const data = (await resp.json()) as { version: string }
-        registryVersion = data.version
-      } else {
-        registryVersion = "not published"
-      }
-    } catch {
-      registryVersion = "fetch error"
-    }
+    const registryVersion = await fetchRegistryVersion(pkg.name)
 
     const marker =
       registryVersion === "not published"
         ? "○"
-        : pkg.version === registryVersion
-        ? "✓"
-        : "↑"
+        : registryVersion === "fetch error"
+          ? "?"
+          : pkg.version === registryVersion
+            ? "✓"
+            : "↑"
+    const independent =
+      pkg.versioning === "independent" ? "  [independent]" : ""
     console.log(
-      `${indent}${marker} ${pkg.name.padEnd(42)} local: ${pkg.version.padEnd(
-        10
-      )} npm: ${registryVersion}`
+      `${indent}${marker} ${pkg.name.padEnd(42)} local: ${pkg.version.padEnd(10)} npm: ${registryVersion}${independent}`,
     )
   }
 }

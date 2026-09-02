@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 import { parseArgs } from "node:util"
-import { loadConfig } from "./config.js"
 import { bump } from "./commands/bump.js"
 import { publish } from "./commands/publish.js"
 import { status } from "./commands/status.js"
+import { loadConfig } from "./config.js"
 
 async function main() {
   const args = process.argv.slice(2)
@@ -45,7 +45,7 @@ async function main() {
 
   // Merge CLI flags into config
   if (values.remotes) {
-    config.remotes = values.remotes.split(",").map((s) => s.trim())
+    config.remotes = values.remotes.split(",").map(s => s.trim())
   }
   if (values["build-command"]) {
     config.buildCommand = values["build-command"]
@@ -68,7 +68,7 @@ async function main() {
       break
     }
     case "publish": {
-      publish(cwd, config, !!values["dry-run"])
+      await publish(cwd, config, !!values["dry-run"])
       break
     }
     case "status": {
@@ -99,7 +99,7 @@ Options:
   process.exit(1)
 }
 
-main().catch((err) => {
+main().catch(err => {
   console.error(err)
   process.exit(1)
 })

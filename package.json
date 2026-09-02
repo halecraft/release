@@ -1,6 +1,6 @@
 {
   "name": "@halecraft/release",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Zero-config release script for monorepos",
   "type": "module",
   "main": "./dist/index.js",
@@ -8,20 +8,28 @@
   "bin": {
     "release": "./dist/cli.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
     "release": "node dist/cli.js",
-    "test": "echo \"No tests yet\" && exit 0"
+    "test": "verify logic",
+    "verify": "verify"
   },
   "dependencies": {
     "jiti": "^2.4.2",
     "picomatch": "^4.0.2"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.8",
+    "@halecraft/verify": "1.3.0",
     "@types/node": "^22.0.0",
     "@types/picomatch": "^3.0.1",
+    "@typescript/native-preview": "7.0.0-dev.20260322.1",
     "tsup": "^8.3.5",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^4.0.17"
   }
 }

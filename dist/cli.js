@@ -3,51 +3,32 @@
 // src/cli.ts
 import { parseArgs } from "util";
 
-// src/config.ts
-import { createJiti } from "jiti";
-import { resolve } from "path";
-import { existsSync } from "fs";
-async function loadConfig(cwd) {
-  const jiti = createJiti(import.meta.url);
-  const configNames = [
-    "release.config.ts",
-    "release.config.js",
-    "release.config.mjs",
-    "release.config.cjs"
-  ];
-  let userConfig = {};
-  for (const name of configNames) {
-    const configPath = resolve(cwd, name);
-    if (existsSync(configPath)) {
-      try {
-        const mod = await jiti.import(configPath);
-        userConfig = mod.default || mod;
-        break;
-      } catch (err) {
-        console.error(`Error loading config ${name}:`, err);
-      }
-    }
-  }
-  return {
-    groups: userConfig.groups,
-    remotes: userConfig.remotes ?? ["origin"],
-    buildCommand: userConfig.buildCommand ?? "pnpm build",
-    testCommand: userConfig.testCommand ?? "pnpm test",
-    access: userConfig.access
-  };
-}
-
 // src/commands/bump.ts
 import { readFileSync as readFileSync2, writeFileSync } from "fs";
-import { resolve as resolve3 } from "path";
+import { resolve as resolve2 } from "path";
 
 // src/workspace.ts
 import { execSync } from "child_process";
 import { readFileSync } from "fs";
-import { resolve as resolve2, relative } from "path";
+import { relative, resolve } from "path";
 import picomatch from "picomatch";
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
+}
+function versioningOf(pkgJson) {
+  return pkgJson.versioning === "independent" ? "independent" : "uniform";
+}
+function matchesAny(relPath, patterns) {
+  return patterns.some((pattern) => picomatch.isMatch(relPath, pattern));
+}
+function matchesGroup(relPath, patterns) {
+  const positives = patterns.filter((p) => !p.startsWith("!"));
+  const negations = patterns.filter((p) => p.startsWith("!"));
+  if (!matchesAny(relPath, positives)) return false;
+  return !matchesAny(
+    relPath,
+    negations.map((p) => p.slice(1))
+  );
 }
 function discoverWorkspace(cwd, config) {
   const raw = execSync("pnpm ls -r --depth -1 --json", {
@@ -56,12 +37,17 @@ function discoverWorkspace(cwd, config) {
     stdio: ["pipe", "pipe", "pipe"]
   });
   const entries = JSON.parse(raw);
+  return buildWorkspace(entries, config, cwd);
+}
+function buildWorkspace(entries, config, root, readPkgJson = readJson) {
   const workspaceNames = new Set(entries.map((e) => e.name));
   const all = [];
   for (const entry of entries) {
-    if (resolve2(entry.path) === resolve2(cwd) && (entry.private ?? false)) continue;
-    const relPath = relative(cwd, resolve2(entry.path));
-    const pkgJson = readJson(resolve2(entry.path, "package.json"));
+    if (resolve(entry.path) === resolve(root) && (entry.private ?? false)) {
+      continue;
+    }
+    const relPath = relative(root, resolve(entry.path));
+    const pkgJson = readPkgJson(resolve(entry.path, "package.json"));
     const deps = pkgJson.dependencies;
     const peerDeps = pkgJson.peerDependencies;
     const internalDeps = [
@@ -73,8 +59,7 @@ function discoverWorkspace(cwd, config) {
     const matchedGroups = [];
     if (config.groups) {
       for (const [groupName, groupDef] of Object.entries(config.groups)) {
-        const isMatch = picomatch.isMatch(relPath, groupDef.packages);
-        if (isMatch) {
+        if (matchesGroup(relPath, groupDef.packages)) {
           matchedGroups.push(groupName);
         }
       }
@@ -85,14 +70,13 @@ function discoverWorkspace(cwd, config) {
       path: relPath,
       private: entry.private ?? false,
       internalDeps,
-      groups: matchedGroups
+      groups: matchedGroups,
+      versioning: versioningOf(pkgJson)
     });
   }
   const publishable = all.filter((p) => !p.private);
   const groups = /* @__PURE__ */ new Map();
   for (const pkg of publishable) {
-    if (pkg.groups.length === 0) {
-    }
     for (const g of pkg.groups) {
       const existing = groups.get(g);
       if (existing) {
@@ -113,29 +97,31 @@ function computePublishTiers(packages) {
   const dependents = new Map(packages.map((p) => [p.name, []]));
   for (const pkg of packages) {
     for (const dep of pkg.internalDeps) {
-      if (nameToPackage.has(dep)) {
-        dependents.get(dep).push(pkg.name);
-        inDegree.set(pkg.name, inDegree.get(pkg.name) + 1);
+      const children = dependents.get(dep);
+      if (children) {
+        children.push(pkg.name);
+        inDegree.set(pkg.name, (inDegree.get(pkg.name) ?? 0) + 1);
       }
     }
   }
   const tiers = [];
-  let queue = packages.filter((p) => inDegree.get(p.name) === 0).sort((a, b) => a.name.localeCompare(b.name));
+  let queue = packages.filter((p) => (inDegree.get(p.name) ?? 0) === 0).sort((a, b) => a.name.localeCompare(b.name));
   while (queue.length > 0) {
     tiers.push(queue);
     const next = [];
     for (const pkg of queue) {
-      for (const child of dependents.get(pkg.name)) {
-        const newDegree = inDegree.get(child) - 1;
+      for (const child of dependents.get(pkg.name) ?? []) {
+        const newDegree = (inDegree.get(child) ?? 0) - 1;
         inDegree.set(child, newDegree);
         if (newDegree === 0) {
-          next.push(nameToPackage.get(child));
+          const ready = nameToPackage.get(child);
+          if (ready) next.push(ready);
         }
       }
     }
     queue = next.sort((a, b) => a.name.localeCompare(b.name));
   }
-  const stuck = packages.filter((p) => inDegree.get(p.name) > 0);
+  const stuck = packages.filter((p) => (inDegree.get(p.name) ?? 0) > 0);
   if (stuck.length > 0) {
     const names = stuck.map((p) => p.name).join(", ");
     throw new Error(`Dependency cycle detected among: ${names}`);
@@ -153,40 +139,89 @@ function readJson2(path) {
 function writeJson(path, data) {
   writeFileSync(path, JSON.stringify(data, null, 2) + "\n");
 }
+function resolveBumpTargets(workspace, config, packagesFlag) {
+  const targets = [];
+  const skipped = [];
+  const emptyGroups = [];
+  if (packagesFlag && packagesFlag.length > 0) {
+    for (const name of packagesFlag) {
+      if (config.groups?.[name] !== void 0) {
+        const members = workspace.groups.get(name) ?? [];
+        if (members.length === 0) {
+          emptyGroups.push(name);
+          continue;
+        }
+        for (const member of members) {
+          if (member.versioning === "independent") {
+            skipped.push(member);
+          } else {
+            targets.push(member);
+          }
+        }
+      } else {
+        const pkg = workspace.publishable.find((p) => p.name === name);
+        if (pkg) {
+          targets.push(pkg);
+        } else {
+          throw new Error(`Unknown package or group "${name}"`);
+        }
+      }
+    }
+  } else {
+    for (const pkg of workspace.publishable) {
+      if (pkg.versioning === "independent") {
+        skipped.push(pkg);
+      } else {
+        targets.push(pkg);
+      }
+    }
+  }
+  return {
+    targets: dedupeByName(targets),
+    skipped: dedupeByName(skipped),
+    emptyGroups: [...new Set(emptyGroups)]
+  };
+}
+function dedupeByName(pkgs) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const pkg of pkgs) {
+    if (!seen.has(pkg.name)) {
+      seen.add(pkg.name);
+      out.push(pkg);
+    }
+  }
+  return out;
+}
 function bump(cwd, version, config, packagesFlag) {
   if (!isValidSemver(version)) {
     console.error(`Invalid semver: ${version}`);
     process.exit(1);
   }
   const workspace = discoverWorkspace(cwd, config);
-  let targets = [];
-  if (packagesFlag && packagesFlag.length > 0) {
-    for (const name of packagesFlag) {
-      if (workspace.groups.has(name)) {
-        targets.push(...workspace.groups.get(name));
-      } else {
-        const pkg = workspace.publishable.find((p) => p.name === name);
-        if (pkg) {
-          targets.push(pkg);
-        } else {
-          console.error(`Error: Unknown package or group "${name}"`);
-          process.exit(1);
-        }
-      }
-    }
-    targets = [...new Set(targets)];
-  } else {
-    targets = workspace.publishable;
+  let plan;
+  try {
+    plan = resolveBumpTargets(workspace, config, packagesFlag);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Error: ${message}`);
+    process.exit(1);
   }
-  if (targets.length === 0) {
+  for (const name of plan.emptyGroups) {
+    console.log(`No publishable packages in group ${name}.`);
+  }
+  for (const pkg of plan.skipped) {
+    console.log(`  Skipping ${pkg.name} (independent versioning)`);
+  }
+  if (plan.targets.length === 0) {
     console.log("No packages to bump.");
     return;
   }
   console.log(`
 Bumping to ${version}:
 `);
-  for (const pkg of targets) {
-    const pkgPath = resolve3(cwd, pkg.path, "package.json");
+  for (const pkg of plan.targets) {
+    const pkgPath = resolve2(cwd, pkg.path, "package.json");
     const pkgJson = readJson2(pkgPath);
     const oldVersion = pkgJson.version;
     pkgJson.version = version;
@@ -194,13 +229,31 @@ Bumping to ${version}:
     console.log(`  ${pkg.name}: ${oldVersion} \u2192 ${version}`);
   }
   console.log(`
-Done. Bumped ${targets.length} package(s).
+Done. Bumped ${plan.targets.length} package(s).
 `);
 }
 
 // src/commands/publish.ts
 import { execSync as execSync2 } from "child_process";
-import { resolve as resolve4 } from "path";
+import { resolve as resolve3 } from "path";
+
+// src/registry.ts
+async function fetchRegistryVersion(name) {
+  try {
+    const resp = await fetch(
+      `https://registry.npmjs.org/${encodeURIComponent(name)}/latest`
+    );
+    if (resp.ok) {
+      const data = await resp.json();
+      return data.version;
+    }
+    return "not published";
+  } catch {
+    return "fetch error";
+  }
+}
+
+// src/commands/publish.ts
 function run(cmd, opts) {
   if (opts?.dryRun) {
     console.log(`  [dry-run] ${cmd}`);
@@ -223,7 +276,59 @@ function checkNpmAuth(cwd) {
     process.exit(1);
   }
 }
-function publish(cwd, config, dryRun) {
+function decidePublishAction(local, registry) {
+  return registry === local ? "skip" : "publish";
+}
+function computeTagPlan(released) {
+  if (released.length === 0) return [];
+  const train = released.filter((p) => p.versioning === "uniform");
+  const trainVersions = new Set(train.map((p) => p.version));
+  if (train.length > 0 && trainVersions.size === 1) {
+    return [
+      `v${train[0].version}`,
+      ...released.filter((p) => p.versioning === "independent").map((p) => `${p.name}@${p.version}`)
+    ];
+  }
+  return released.map((p) => `${p.name}@${p.version}`);
+}
+function createTag(cwd, config, tagName, dryRun) {
+  if (dryRun) {
+    run(`git tag ${tagName}`, { dryRun });
+    for (const remote of config.remotes) {
+      run(`git push ${remote} ${tagName}`, { dryRun });
+    }
+    return;
+  }
+  const existingTag = execSync2(`git tag -l "${tagName}"`, {
+    cwd,
+    encoding: "utf8"
+  }).trim();
+  if (existingTag) {
+    const tagCommit = execSync2(`git rev-list -n 1 "${tagName}"`, {
+      cwd,
+      encoding: "utf8"
+    }).trim();
+    const headCommit = execSync2("git rev-parse HEAD", {
+      cwd,
+      encoding: "utf8"
+    }).trim();
+    if (tagCommit === headCommit) {
+      console.log(`  Tag ${tagName} already exists on HEAD, skipping.`);
+    } else {
+      console.error(
+        `Error: tag ${tagName} already exists on commit ${tagCommit.slice(0, 8)}, but HEAD is ${headCommit.slice(0, 8)}.`
+      );
+      console.error("Delete the existing tag or use a different version.");
+      process.exit(1);
+    }
+  } else {
+    run(`git tag ${tagName}`, { cwd });
+    for (const remote of config.remotes) {
+      run(`git push ${remote} ${tagName}`, { cwd });
+    }
+  }
+}
+async function publish(cwd, config, dryRun) {
   console.log(`
 ${dryRun ? "[DRY RUN] " : ""}Publishing packages
 `);
@@ -240,9 +345,9 @@ ${dryRun ? "[DRY RUN] " : ""}Publishing packages
     console.log("No publishable packages found. Nothing to publish.\n");
     return;
   }
-  const version = workspace.publishable[0].version;
   console.log("\nStep 3/4: Publishing in dependency order...\n");
   const published = [];
+  const skipped = [];
   const failed = [];
   for (let tier = 0; tier < tiers.length; tier++) {
     const pkgs = tiers[tier];
@@ -251,13 +356,30 @@ ${dryRun ? "[DRY RUN] " : ""}Publishing packages
     for (const pkg of pkgs) {
       console.log(`
 Publishing ${pkg.name}@${pkg.version}...`);
+      const registry = await fetchRegistryVersion(pkg.name);
+      if (registry === "fetch error") {
+        if (dryRun) {
+          console.log(
+            "  (registry unreachable \u2014 dry-run treats this as a publish)"
+          );
+        } else {
+          console.error(
+            `  \u2717 Could not check the registry for ${pkg.name}; aborting.`
+          );
+          process.exit(1);
+        }
+      } else if (decidePublishAction(pkg.version, registry) === "skip") {
+        console.log(`  Skipping ${pkg.name}@${pkg.version} (already published)`);
+        skipped.push(`${pkg.name}@${pkg.version}`);
+        continue;
+      }
       const dryRunFlag = dryRun ? " --dry-run" : "";
       const accessFlag = ` --access ${config.access ?? "public"}`;
       try {
         run(`pnpm publish${accessFlag} --no-git-checks${dryRunFlag}`, {
-          cwd: resolve4(cwd, pkg.path)
+          cwd: resolve3(cwd, pkg.path)
         });
-        published.push(pkg.name);
+        published.push(pkg);
       } catch {
         console.error(`  \u2717 Failed to publish ${pkg.name}@${pkg.version}`);
         failed.push(pkg.name);
@@ -269,54 +391,26 @@ Publishing ${pkg.name}@${pkg.version}...`);
 `);
   if (published.length > 0) {
     console.log(
-      `  ${dryRun ? "[DRY RUN] " : ""}Published (${published.length}): ${published.join(", ")}`
+      `  ${dryRun ? "[DRY RUN] " : ""}Published (${published.length}): ${published.map((p) => `${p.name}@${p.version}`).join(", ")}`
     );
+  }
+  if (skipped.length > 0) {
+    console.log(`  Skipped (${skipped.length}): ${skipped.join(", ")}`);
   }
   if (failed.length > 0) {
     console.log(`  Failed (${failed.length}): ${failed.join(", ")}`);
     process.exit(1);
   }
-  const tagName = `v${version}`;
-  console.log(`
-Step 4/4: Tagging release as ${tagName}...
-`);
-  if (dryRun) {
-    run(`git tag ${tagName}`, { dryRun });
-    for (const remote of config.remotes) {
-      run(`git push ${remote} ${tagName}`, { dryRun });
-    }
-  } else {
-    const existingTag = execSync2(`git tag -l "${tagName}"`, {
-      cwd,
-      encoding: "utf8"
-    }).trim();
-    if (existingTag) {
-      const tagCommit = execSync2(`git rev-list -n 1 "${tagName}"`, {
-        cwd,
-        encoding: "utf8"
-      }).trim();
-      const headCommit = execSync2("git rev-parse HEAD", {
-        cwd,
-        encoding: "utf8"
-      }).trim();
-      if (tagCommit === headCommit) {
-        console.log(`  Tag ${tagName} already exists on HEAD, skipping.`);
-      } else {
-        console.error(
-          `Error: tag ${tagName} already exists on commit ${tagCommit.slice(
-            0,
-            8
-          )}, but HEAD is ${headCommit.slice(0, 8)}.`
-        );
-        console.error("Delete the existing tag or use a different version.");
-        process.exit(1);
-      }
-    } else {
-      run(`git tag ${tagName}`, { cwd });
-      for (const remote of config.remotes) {
-        run(`git push ${remote} ${tagName}`, { cwd });
-      }
-    }
+  const tags = computeTagPlan(published);
+  if (tags.length === 0) {
+    console.log("\nNothing new was published \u2014 no tag created.");
+    return;
+  }
+  console.log("\nStep 4/4: Tagging release...\n");
+  for (const tagName of tags) {
+    console.log(`
+  Creating tag ${tagName}...`);
+    createTag(cwd, config, tagName, dryRun);
   }
   console.log();
 }
@@ -339,27 +433,47 @@ async function status(cwd, config) {
 }
 async function printPackages(pkgs, indent = "  ") {
   for (const pkg of pkgs) {
-    let registryVersion;
-    try {
-      const resp = await fetch(
-        `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/latest`
-      );
-      if (resp.ok) {
-        const data = await resp.json();
-        registryVersion = data.version;
-      } else {
-        registryVersion = "not published";
-      }
-    } catch {
-      registryVersion = "fetch error";
-    }
-    const marker = registryVersion === "not published" ? "\u25CB" : pkg.version === registryVersion ? "\u2713" : "\u2191";
+    const registryVersion = await fetchRegistryVersion(pkg.name);
+    const marker = registryVersion === "not published" ? "\u25CB" : registryVersion === "fetch error" ? "?" : pkg.version === registryVersion ? "\u2713" : "\u2191";
+    const independent = pkg.versioning === "independent" ? "  [independent]" : "";
     console.log(
-      `${indent}${marker} ${pkg.name.padEnd(42)} local: ${pkg.version.padEnd(
-        10
-      )} npm: ${registryVersion}`
+      `${indent}${marker} ${pkg.name.padEnd(42)} local: ${pkg.version.padEnd(10)} npm: ${registryVersion}${independent}`
     );
   }
+}
+
+// src/config.ts
+import { existsSync } from "fs";
+import { resolve as resolve4 } from "path";
+import { createJiti } from "jiti";
+async function loadConfig(cwd) {
+  const jiti = createJiti(import.meta.url);
+  const configNames = [
+    "release.config.ts",
+    "release.config.js",
+    "release.config.mjs",
+    "release.config.cjs"
+  ];
+  let userConfig = {};
+  for (const name of configNames) {
+    const configPath = resolve4(cwd, name);
+    if (existsSync(configPath)) {
+      try {
+        const mod = await jiti.import(configPath);
+        userConfig = mod.default || mod;
+        break;
+      } catch (err) {
+        console.error(`Error loading config ${name}:`, err);
+      }
+    }
+  }
+  return {
+    groups: userConfig.groups,
+    remotes: userConfig.remotes ?? ["origin"],
+    buildCommand: userConfig.buildCommand ?? "pnpm build",
+    testCommand: userConfig.testCommand ?? "pnpm test",
+    access: userConfig.access
+  };
 }
 
 // src/cli.ts
@@ -419,7 +533,7 @@ async function main() {
       break;
     }
     case "publish": {
-      publish(cwd, config, !!values["dry-run"]);
+      await publish(cwd, config, !!values["dry-run"]);
       break;
     }
     case "status": {
