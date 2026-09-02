@@ -40,6 +40,10 @@ The policy is data, not code: discovery reads `versioning` from each
 
 ## Gotchas
 
+- The auth preflight runs `pnpm whoami`, matching the `pnpm publish` step.
+  `pnpm login` stores its token in `~/.config/pnpm/auth.ini`, which `npm whoami`
+  would never see — checking auth with npm would reject a perfectly valid pnpm
+  login.
 - A configured group with no publishable members (all private) is a no-op, not
   an error: `bump --packages experimental` prints a message and exits 0.
 - A group name that collides with a package name shadows it in `--packages`;

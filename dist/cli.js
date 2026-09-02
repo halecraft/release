@@ -265,14 +265,14 @@ function run(cmd, opts) {
 function checkNpmAuth(cwd) {
   console.log("Checking npm authentication...\n");
   try {
-    const user = execSync2("npm whoami", {
+    const user = execSync2("pnpm whoami", {
       cwd,
       encoding: "utf8"
     }).trim();
     console.log(`  Logged in as: ${user}
 `);
   } catch {
-    console.error("Error: Not logged in to npm. Run `npm login` first.\n");
+    console.error("Error: Not logged in. Run `pnpm login` first.\n");
     process.exit(1);
   }
 }

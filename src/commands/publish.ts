@@ -20,13 +20,15 @@ function run(cmd: string, opts?: { dryRun?: boolean; cwd?: string }): void {
 function checkNpmAuth(cwd: string): void {
   console.log("Checking npm authentication...\n")
   try {
-    const user = execSync("npm whoami", {
+    // pnpm owns auth for this tool (pnpm login → ~/.config/pnpm/auth.ini);
+    // npm whoami would read ~/.npmrc instead and miss that token.
+    const user = execSync("pnpm whoami", {
       cwd,
       encoding: "utf8",
     }).trim()
     console.log(`  Logged in as: ${user}\n`)
   } catch {
-    console.error("Error: Not logged in to npm. Run `npm login` first.\n")
+    console.error("Error: Not logged in. Run `pnpm login` first.\n")
     process.exit(1)
   }
 }
